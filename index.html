@@ -291,6 +291,9 @@ tbody tr:last-child td{border-bottom:0}
       <option value="emdia">Em dia (sem nada vencido)</option>
       <option value="acordo">Em atraso, com acordo</option>
       <option value="semacordo">Em atraso, sem acordo</option>
+      <option value="fr-acordo">Atraso só no acordo</option>
+      <option value="fr-trimestre">Atraso só no trimestre</option>
+      <option value="fr-ambos">Atraso nas duas frentes</option>
       <option value="zero">Nunca pagaram nada</option>
     </select>
   </div>
@@ -319,6 +322,23 @@ tbody tr:last-child td{border-bottom:0}
   <div class="card"><h2>As 15 regionais com maior atraso</h2><p class="hint">Toque em uma regional para ver quais igrejas dela estão em atraso.</p><div class="hbars" id="cutReg"></div></div>
 </section>
 
+
+<section class="panel" id="p-frentes">
+  <div class="phead"><h1>Acordo x Trimestre</h1><p>Duas frentes com lógicas diferentes: recuperar o passado e não deixar o presente virar passado.</p></div>
+  <div class="grid g2" id="frentesBlocos"></div>
+  <div class="card">
+    <h2>Quem falha em qual frente</h2>
+    <p class="hint">Toque em um grupo para ver as igrejas. É aqui que a estratégia de cobrança muda.</p>
+    <div class="hbars" id="frentesCruz"></div>
+    <p class="hint" id="frentesNota" style="margin-top:12px"></p>
+  </div>
+  <div class="card">
+    <h2>O atraso mês a mês, separado por frente</h2>
+    <p class="hint">Pelo mês de vencimento da parcela. A barra escura é acordo; a clara é trimestre e vendas avulsas.</p>
+    <svg class="chart" id="chFrentes" viewBox="0 0 560 240" role="img" aria-label="Atraso por mês separado entre acordo e trimestre"></svg>
+    <p class="hint" id="chFrentesNota" style="margin-top:8px"></p>
+  </div>
+</section>
 
 <section class="panel" id="p-alertas">
   <div class="phead"><h1>Pontos de alerta</h1><p>O que precisa de decisão da equipe.</p></div>
@@ -447,8 +467,9 @@ function recalcular() {
   const ig = new Map();
   for (const a of RAW.igrejas) ig.set(a[0], {
     c: a[0], n: a[1], p: a[2], t: a[3], r: a[4], sd: String(a[1]).toUpperCase() === String(a[2]).toUpperCase(),
-    f: 0, pg: 0, at: 0, av: 0, d: 0, novas: 0, acq: 0, act: 0
+    f: 0, pg: 0, at: 0, av: 0, atAc: 0, atTr: 0, d: 0, novas: 0, acq: 0, act: 0
   });
+  const atMes = new Map();
 
   const parcelas = [];                       // só as em aberto (base + lançamentos)
   const conta = new Map(), mm = new Map(), cx = new Map();
@@ -500,6 +521,13 @@ function recalcular() {
     }
     if (vencida) {
       at += p.v; g.at += p.v; o.at += p.v;
+      const ac = p.k === 'Acordo';
+      if (ac) g.atAc += p.v; else g.atTr += p.v;
+      if (p.d) {
+        const mv = p.d.slice(0, 7);
+        if (!atMes.has(mv)) atMes.set(mv, {m: mv, ac: 0, tr: 0});
+        atMes.get(mv)[ac ? 'ac' : 'tr'] += p.v;
+      }
       const dd = diasDe(p.d);
       if (dd > g.d) g.d = dd;
       aging[dd <= 30 ? 0 : dd <= 60 ? 1 : dd <= 90 ? 2 : dd <= 120 ? 3 : 4] += p.v;
@@ -527,6 +555,7 @@ function recalcular() {
     g.ab = r <= 0.5 ? 'A' : r <= 0.8 ? 'B' : 'C';
   });
   lista.forEach(g => {
+    g.frente = g.atAc > 0.005 && g.atTr > 0.005 ? 'ambos' : (g.atAc > 0.005 ? 'acordo' : (g.atTr > 0.005 ? 'trimestre' : ''));
     g.sit = g.at > 0.005 ? (g.act > 0 ? 'acordo' : 'atraso') : (g.av > 0.005 ? 'emdia' : 'adim');
   });
   const comAtraso = lista.filter(g => g.at > 0.005);
@@ -545,6 +574,7 @@ function recalcular() {
     parcelas, porId, lista, ig, at, av, novoTotal,
     f: f + novoTotal, pg: pgBase + recup, recup, recupAt, nb,
     conta, aging, agingN, credito, dtRuim, dtRuimV,
+    atMes: [...atMes.values()].sort((a, b) => a.m < b.m ? -1 : 1),
     mensal: [...mm.values()].filter(x => x.f > 0).sort((a, b) => a.m < b.m ? -1 : 1),
     caixa: [...cx.entries()].map(([m, v]) => ({m, v})).sort((a, b) => a.m < b.m ? -1 : 1),
     comAtraso: comAtraso.length, zeradas: zeradas.length, zeradasV: soma(zeradas),
@@ -577,7 +607,8 @@ const PAGS = [
   {g: 'Painel', itens: [
     {id: 'visao', t: 'Visão geral', ic: '<rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>'},
     {id: 'igrejas', t: 'Igrejas', ic: '<path d="M12 2l4 4v15H8V6z"/><path d="M8 21H3v-9l5-3"/><path d="M16 21h5v-9l-5-3"/>'},
-    {id: 'cortes', t: 'Distribuição', ic: '<path d="M4 20V10M10 20V4M16 20v-7M22 20v-4"/>'}
+    {id: 'cortes', t: 'Distribuição', ic: '<path d="M4 20V10M10 20V4M16 20v-7M22 20v-4"/>'},
+    {id: 'frentes', t: 'Acordo x Trimestre', ic: '<path d="M12 3v18"/><path d="M3 8h6M3 14h6M15 8h6M15 14h6"/>'}
   ]},
   {g: 'Ferramentas', itens: [
     {id: 'alertas', t: 'Pontos de alerta', ic: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>'},
@@ -754,6 +785,7 @@ const FAIXAS = [
 ];
 const faixaDe = v => FAIXAS.find(f => v > f.a && v <= f.b) || FAIXAS[0];
 function igrejasDoSegmento(grupo, chave) {
+  if (grupo === 'frente') return S.lista.filter(g => g.frente === chave).sort((a, b) => b.at - a.at);
   if (grupo === 'faixa') return S.lista.filter(g => g.at > 0.005 && faixaDe(g.at).k === chave);
   if (grupo === 'reg') return S.lista.filter(g => String(g.r) === String(chave) && g.at > 0.005);
   if (grupo === 'tipo') return S.lista.filter(g => g.t === chave && g.at > 0.005);
@@ -769,7 +801,8 @@ function detalhe(grupo, chave) {
   const l = igrejasDoSegmento(grupo, chave);
   if (!l.length) return `<div class="drill"><div class="empty">Nenhuma igreja em atraso neste grupo.</div></div>`;
   const tot = l.reduce((s, g) => s + g.at, 0);
-  const rot = grupo === 'reg' ? 'regional ' + chave : chave;
+  const ROTF = {ambos: 'igrejas que falham nas duas frentes', acordo: 'igrejas com atraso só no acordo', trimestre: 'igrejas com atraso só no trimestre'};
+  const rot = grupo === 'reg' ? 'regional ' + chave : (grupo === 'frente' ? ROTF[chave] : chave);
   const est = grupo === 'faixa' ? (FAIXAS.find(f => f.k === chave) || {}).e : '';
   return `<div class="drill">
     ${est ? `<p class="hint" style="margin:0 0 8px"><b>Caminho sugerido:</b> ${esc(est)}</p>` : ''}
@@ -810,6 +843,69 @@ function pintaCortes() {
     `Na outra ponta, ${gra.length} igrejas devem mais de R$ 2.000 e somam ${brl(gra.reduce((s, g) => s + g.at, 0))}: cada uma merece plano individual.`;
 }
 
+function pintaFrentes() {
+  const eh = k => k === 'Acordo';
+  let A = {f: 0, pg: 0, at: 0, av: 0}, C = {f: 0, pg: 0, at: 0, av: 0};
+  for (const [k, o] of S.conta) {
+    const d = eh(k) ? A : C;
+    d.f += o.f; d.pg += o.pg; d.at += o.at; d.av += o.av;
+  }
+  const nA = S.lista.filter(g => g.atAc > 0.005).length, nC = S.lista.filter(g => g.atTr > 0.005).length;
+  const bloco = (t, sub, d, n, cor, acao) => `<div class="card" style="margin-top:0;border-top:3px solid ${cor}">
+    <h2>${t}</h2><p class="hint">${sub}</p>
+    <div class="dstat" style="margin:12px 0 10px">
+      <div><b class="num" style="color:var(--atraso)">${brlc(d.at)}</b><small>em atraso</small></div>
+      <div><b class="num">${brlc(d.av)}</b><small>a vencer</small></div>
+      <div><b class="num" style="color:var(--pago)">${pc0(pct(d.pg, d.f))}</b><small>já pago</small></div>
+    </div>
+    <div class="bar" style="height:22px">
+      <span style="width:${pct(d.pg, d.f)}%;background:var(--pago)"></span>
+      <span style="width:${pct(d.av, d.f)}%;background:var(--avencer)"></span>
+      <span style="width:${pct(d.at, d.f)}%;background:var(--atraso)"></span>
+    </div>
+    <p class="hint">${n} igrejas em atraso nesta frente · ${brl(d.f)} lançados</p>
+    <p style="font-size:13px;color:var(--ink2);margin:8px 0 0">${acao}</p></div>`;
+  document.getElementById('frentesBlocos').innerHTML =
+    bloco('Passivo — acordos', 'Dívida antiga já renegociada. Parcelas que seguem até 2031.', A, nA, 'var(--atraso)',
+      '<b>Meta: recuperar.</b> Cada real aqui é dinheiro que já foi gasto em material entregue há muito tempo. Cobrança individual, com escalonamento para a igreja pai.') +
+    bloco('Corrente — trimestres', 'Material do trimestre vigente e do anterior, mais vendas avulsas.', C, nC, 'var(--avencer)',
+      '<b>Meta: não deixar virar acordo.</b> O que não for pago aqui vira o passivo do ano que vem. Cobrança preventiva, antes e logo depois do vencimento.');
+
+  const gr = {acordo: {n: 0, v: 0}, trimestre: {n: 0, v: 0}, ambos: {n: 0, v: 0}};
+  S.lista.forEach(g => { if (g.frente) { gr[g.frente].n++; gr[g.frente].v += g.at; } });
+  const rot = {ambos: 'Falham nas duas frentes', acordo: 'Atraso só no acordo', trimestre: 'Atraso só no trimestre'};
+  const lin = ['ambos', 'acordo', 'trimestre'].map(k => [rot[k], gr[k].v, gr[k].n + ' igrejas', k]);
+  barras('frentesCruz', lin, Math.max(...lin.map(l => l[1]), 1), 'var(--accent)', 'frente');
+  document.getElementById('frentesNota').innerHTML =
+    `As <b>${gr.ambos.n} igrejas que falham nas duas frentes</b> concentram ${brl(gr.ambos.v)}, ou ${pc0(pct(gr.ambos.v, S.at))} de todo o atraso. ` +
+    `São elas que continuam retirando material sem pagar nem o acordo antigo. Enquanto não houver trava na retirada, a dívida delas cresce mais rápido do que a cobrança consegue reduzir.`;
+
+  const d = S.atMes.slice(-9), W = 560, H = 240, L = 48, R = 14, T = 20, B = 34;
+  if (!d.length) return;
+  const iw = W - L - R, ih = H - T - B, max = Math.max(...d.map(x => x.ac + x.tr)) * 1.15;
+  const bw = Math.min(42, iw / d.length * .58);
+  let g = '';
+  for (let i = 0; i <= 4; i++) {
+    const y = T + ih - ih * i / 4;
+    g += `<line class="gline" x1="${L}" y1="${y}" x2="${L + iw}" y2="${y}"/><text class="axis" x="${L - 7}" y="${y + 3.5}" text-anchor="end">${Math.round(max * i / 4 / 1000)}k</text>`;
+  }
+  d.forEach(x => {
+    const i = d.indexOf(x), cx = L + iw * (i + .5) / d.length;
+    const hA = ih * x.ac / max, hT = ih * x.tr / max;
+    g += `<rect x="${cx - bw / 2}" y="${T + ih - hA}" width="${bw}" height="${hA}" rx="2" fill="var(--atraso)" opacity=".85"><title>${rotMes(x.m)}: acordo ${brl(x.ac)}</title></rect>
+          <rect x="${cx - bw / 2}" y="${T + ih - hA - hT}" width="${bw}" height="${hT}" rx="2" fill="var(--avencer)" opacity=".9"><title>${rotMes(x.m)}: trimestre ${brl(x.tr)}</title></rect>
+          <text class="axis" x="${cx}" y="${T + ih - hA - hT - 6}" text-anchor="middle" fill="var(--ink)" font-weight="600">${Math.round((x.ac + x.tr) / 1000)}k</text>
+          <text class="axis" x="${cx}" y="${H - 14}" text-anchor="middle">${rotMes(x.m)}</text>`;
+  });
+  g += `<rect x="${L}" y="${H - 9}" width="9" height="9" rx="2" fill="var(--atraso)"/><text class="axis" x="${L + 13}" y="${H - 1.5}">acordo</text>
+        <rect x="${L + 62}" y="${H - 9}" width="9" height="9" rx="2" fill="var(--avencer)"/><text class="axis" x="${L + 75}" y="${H - 1.5}">trimestre</text>`;
+  document.getElementById('chFrentes').innerHTML = g;
+  const u = d[d.length - 1];
+  document.getElementById('chFrentesNota').textContent =
+    `Em ${rotMes(u.m)}, ${brl(u.tr)} do atraso vem do trimestre e ${brl(u.ac)} do acordo. ` +
+    `A parte clara é a que ainda dá para evitar: cobrada a tempo, ela não entra na fila do acordo.`;
+}
+
 /* ============ igrejas ============ */
 let ordem = {k: 'at', dir: -1};
 function filtradas() {
@@ -823,6 +919,7 @@ function filtradas() {
   if (fr) l = l.filter(g => String(g.r) === fr);
   if (fs === 'at') l = l.filter(g => g.at > 0.005);
   else if (fs === 'zero') l = l.filter(g => g.pg <= 0.005 && g.at > 0.005);
+  else if (fs.startsWith('fr-')) l = l.filter(g => g.frente === fs.slice(3));
   else if (fs === 'adim') l = l.filter(g => g.sit === 'adim');
   else if (fs === 'emdia') l = l.filter(g => g.sit === 'emdia');
   else if (fs === 'acordo') l = l.filter(g => g.sit === 'acordo');
@@ -1236,7 +1333,7 @@ function pintaImportar() {
 /* ============ ciclo ============ */
 function repinta() {
   recalcular();
-  pintaVisao(); pintaSemanal(); pintaIgrejas(); pintaCortes(); pintaAlertas();
+  pintaVisao(); pintaSemanal(); pintaIgrejas(); pintaCortes(); pintaFrentes(); pintaAlertas();
   pintaLancamentos(); pintaBaixas(); pintaImportar();
   if (atual !== null) pintaFicha();
 }
@@ -1275,7 +1372,7 @@ document.body.addEventListener('click', e => {
   if (hr) {
     const g = hr.dataset.drill, k = hr.dataset.chave;
     drill = (drill.g === g && String(drill.k) === String(k)) ? {g: null, k: null} : {g, k};
-    return pintaCortes();
+    return g === 'frente' ? pintaFrentes() : pintaCortes();
   }
   const p = e.target.closest('[data-pag]'); if (p) return registrar(p.dataset.pag);
   const s = e.target.closest('[data-est]'); if (s) return estornar(s.dataset.est);
