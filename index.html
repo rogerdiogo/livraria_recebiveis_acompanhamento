@@ -282,12 +282,20 @@ button.act.mini{padding:3px 8px;font-size:11.5px}
   <div class="phead"><h1>Visão geral</h1><p id="pheadMeta">Posição geral dos recebíveis da livraria</p></div>
   <div id="dbNotice"></div>
   <div class="card">
-    <h2>Onde está o dinheiro do ano</h2>
-    <p class="hint">Tudo o que foi lançado para as igrejas, separado pelo que já entrou, o que ainda vai vencer e o que passou do prazo.</p>
+    <div class="supcab" style="margin-bottom:6px">
+      <div><h2>Onde está o dinheiro</h2></div>
+      <select id="fContaVisao" style="flex:0 1 230px">
+        <option value="">Todas as contas somadas</option>
+      </select>
+    </div>
+    <p class="hint" id="visaoHint">Tudo o que foi lançado para as igrejas no ano, separado pelo que já entrou, o que ainda vai vencer e o que passou do prazo. Use o seletor para ver um trimestre ou o acordo isoladamente.</p>
     <div class="total hint">Total lançado: <b class="num" id="tTotal" style="color:var(--ink);font-size:14px"></b></div>
     <div class="bar" id="tBar"></div>
     <div class="legend" id="tLegend"></div>
     <div class="kpis" id="kpis"></div>
+    <h2 style="margin-top:22px">Composição por conta</h2>
+    <p class="hint">O total do ano é a soma destas linhas. Cada uma tem uma lógica de cobrança diferente.</p>
+    <div id="visaoContas"></div>
   </div>
   <div class="grid g2">
     <div class="card">
@@ -753,23 +761,61 @@ function irPara(p) {
 
 /* ============ visão geral ============ */
 function pintaVisao() {
-  document.getElementById('tTotal').textContent = brl(S.f);
+  const sel = document.getElementById('fContaVisao');
+  if (sel.options.length <= 1) {
+    [...S.conta.keys()].sort().forEach(k => sel.add(new Option(k, k)));
+  }
+  const kf = sel.value;
+  let V;
+  if (kf) {
+    const o = S.conta.get(kf) || {f: 0, pg: 0, at: 0, av: 0};
+    const igAt = new Set(), hoje = hojeISO();
+    let dsum = 0, dn = 0;
+    for (const p of S.parcelas) {
+      if (p.k !== kf || p.quitada) continue;
+      const venc = p.novo ? !!(p.d && p.d < hoje) : p.atr;
+      if (venc) { igAt.add(p.c); if (p.d) { dsum += diasDe(p.d); dn++; } }
+    }
+    V = {f: o.f, pg: o.pg, at: o.at, av: o.av, nIg: igAt.size, dmed: dn ? dsum / dn : 0};
+  } else {
+    V = {f: S.f, pg: S.pg, at: S.at, av: S.av, nIg: S.comAtraso, dmed: S.dmed};
+  }
+  document.getElementById('visaoHint').textContent = kf
+    ? `Somente ${kf}. Lançado, recebido, a vencer e vencido desta conta.`
+    : 'Tudo o que foi lançado para as igrejas no ano, somando os trimestres, o acordo e as vendas avulsas. Use o seletor para ver uma conta isoladamente.';
+  document.getElementById('tTotal').textContent = brl(V.f);
   const pm = document.getElementById('pheadMeta');
   if (pm) pm.textContent = `posição de ${dbr(baseInfo.v)} · ${RAW.igrejas.length} igrejas · ${RAW.rows.length.toLocaleString('pt-BR')} parcelas`;
-  const seg = [['--pago', S.pg, 'Já recebido'], ['--avencer', S.av, 'Ainda vai vencer'], ['--atraso', S.at, 'Vencido e não pago']];
+  const seg = [['--pago', V.pg, 'Já recebido'], ['--avencer', V.av, 'Ainda vai vencer'], ['--atraso', V.at, 'Vencido e não pago']];
   document.getElementById('tBar').innerHTML = seg.map(([tok, v]) => {
-    const w = pct(v, S.f);
+    const w = pct(v, V.f);
     return `<span style="width:${w}%;background:var(${tok})" title="${brl(v)}">${w > 11 ? pc1(w) : ''}</span>`;
   }).join('');
   document.getElementById('tLegend').innerHTML = seg.map(([tok, v, lab]) =>
     `<div><i class="dot" style="background:var(${tok})"></i><span><b class="num">${brl(v)}</b>
-     <small>${lab} · ${pc1(pct(v, S.f))} do total</small></span></div>`).join('');
+     <small>${lab} · ${pc1(pct(v, V.f))} do total</small></span></div>`).join('');
   document.getElementById('kpis').innerHTML = [
-    [pc1(pct(S.pg, S.f)), 'do lançado já entrou'],
-    [String(S.comAtraso), 'igrejas com parcela vencida'],
-    [Math.round(S.dmed) + ' dias', 'atraso médio das parcelas'],
-    [brlc(S.at / Math.max(1, S.comAtraso)), 'atraso médio por igreja']
+    [pc1(pct(V.pg, V.f)), 'do lançado já entrou'],
+    [String(V.nIg), 'igrejas com parcela vencida'],
+    [Math.round(V.dmed) + ' dias', 'atraso médio das parcelas'],
+    [brlc(V.at / Math.max(1, V.nIg)), 'atraso médio por igreja']
   ].map(([v, l]) => `<div class="kpi"><span class="v num">${v}</span><span class="l">${l}</span></div>`).join('');
+  const linhas = [...S.conta.entries()].sort((a, b) => b[1].f - a[1].f);
+  document.getElementById('visaoContas').innerHTML =
+    `<div class="tablewrap"><table style="min-width:620px"><thead><tr>
+      <th>Conta</th><th class="r">Lançado</th><th class="r">Recebido</th><th class="r">% pago</th>
+      <th class="r">A vencer</th><th class="r">Em atraso</th></tr></thead><tbody>` +
+    linhas.map(([k, o]) => `<tr style="cursor:default${kf && kf !== k ? ';opacity:.45' : ''}">
+      <td style="font-weight:600">${esc(k)}</td><td class="r num">${brl(o.f)}</td>
+      <td class="r num" style="color:var(--pago)">${brl(o.pg)}</td><td class="r">${pc1(pct(o.pg, o.f))}</td>
+      <td class="r num">${o.av ? brl(o.av) : '—'}</td>
+      <td class="r num" style="font-weight:600;color:var(--atraso)">${o.at ? brl(o.at) : '—'}</td></tr>`).join('') +
+    `<tr style="cursor:default;background:var(--surface2)"><td style="font-weight:700">TOTAL</td>
+      <td class="r num" style="font-weight:700">${brl(S.f)}</td>
+      <td class="r num" style="font-weight:700">${brl(S.pg)}</td>
+      <td class="r" style="font-weight:700">${pc1(pct(S.pg, S.f))}</td>
+      <td class="r num" style="font-weight:700">${brl(S.av)}</td>
+      <td class="r num" style="font-weight:700">${brl(S.at)}</td></tr></tbody></table></div>`;
   graficoMes(); graficoCaixa(); barrasAging();
 }
 function graficoMes() {
@@ -1803,6 +1849,7 @@ document.getElementById('btnLote').onclick = lancarLote;
 document.getElementById('btnUnit').onclick = lancarUnit;
 document.getElementById('arquivo').addEventListener('change', e => { if (e.target.files[0]) lerArquivo(e.target.files[0]); });
 ['fRegDist', 'fZonaDist'].forEach(id => document.getElementById(id).addEventListener('change', pintaCortes));
+document.getElementById('fContaVisao').addEventListener('change', pintaVisao);
 document.getElementById('btnImportar').onclick = publicarBase;
 document.getElementById('btnVoltarBase').onclick = voltarBaseOriginal;
 document.getElementById('btnSupConf').onclick = conferirSup;
