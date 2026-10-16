@@ -220,6 +220,7 @@ tbody tr:last-child td{border-bottom:0}
 .parc .meta{font-size:12px;color:var(--muted);margin-top:3px}
 .parc .late{color:var(--atraso);font-weight:600}
 .parc .form{margin-top:12px}
+.supcab{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
 .parc .cod{font-variant-numeric:tabular-nums;font-weight:600;color:var(--ink2);
   background:var(--surface2);border:1px solid var(--line);border-radius:4px;padding:1px 6px}
 .saldo{margin-top:9px;font-size:12.5px;color:var(--ink2);background:var(--avencer-bg);
@@ -474,6 +475,23 @@ button.act.mini{padding:3px 8px;font-size:11.5px}
   </div>
 </section>
 
+<section class="panel" id="p-supervisao">
+  <div class="phead"><h1>Supervisão por zona</h1><p>Carteira de cada equipe regional, com as igrejas a acionar.</p></div>
+  <div id="supCards"></div>
+
+  <div class="card">
+    <h2>Equipes de supervisão</h2>
+    <p class="hint">Cole a lista no mesmo formato do comunicado: uma linha com "Zona X - Nome do supervisor", depois a palavra Co-supervisores e os nomes, um por linha. Os nomes ficam guardados no painel e não entram no arquivo publicado.</p>
+    <textarea id="supTxt" placeholder="Zona Sul - Fulano de Tal&#10;Co-supervisores&#10;Beltrano&#10;Sicrano&#10;&#10;Zona Oeste - ..."></textarea>
+    <div id="supMsg"></div>
+    <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="act" id="btnSupConf">Conferir</button>
+      <button class="act primary" id="btnSupSalvar" disabled>Salvar equipes</button>
+      <button class="act danger" id="btnSupLimpar" hidden>Remover equipes</button>
+    </div>
+  </div>
+</section>
+
 <section class="panel" id="p-importar">
   <div class="phead"><h1>Atualizar base</h1><p>Suba a planilha nova do sistema da livraria e o painel inteiro se recalcula.</p></div>
   <div class="card">
@@ -713,6 +731,7 @@ const PAGS = [
     {id: 'alertas', t: 'Pontos de alerta', ic: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>'},
     {id: 'lancamentos', t: 'Novos lançamentos', ic: '<path d="M12 5v14M5 12h14"/>'},
     {id: 'baixas', t: 'Baixas do painel', ic: '<path d="M20 7L10 17l-5-5"/>'},
+    {id: 'supervisao', t: 'Supervisão por zona', ic: '<circle cx="9" cy="8" r="3"/><path d="M3 20v-1a5 5 0 015-5h2a5 5 0 015 5v1"/><path d="M17 11h4M19 9v4"/>'},
     {id: 'importar', t: 'Atualizar base', ic: '<path d="M12 16V4M8 8l4-4 4 4"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/>'}
   ]}
 ];
@@ -1440,6 +1459,103 @@ function pintaCaixa() {
     `Compromisso total com a editora: ${brl(totS)}, dos quais ${brl(pagoS)} já foram pagos. Restam ${brl(totS - pagoS)} a desembolsar.`;
 }
 
+/* ============ supervisão ============ */
+let SUP = new Map(), supPronto = null;
+function parseSup(txt) {
+  const out = new Map();
+  let atual = null, emCo = false;
+  txt.split(/\r?\n/).forEach(ln => {
+    const l = ln.trim(); if (!l) { return; }
+    const m = l.match(/^(zona\s+[a-zç]+)\s*[-–—:]\s*(.+)$/i);
+    if (m) {
+      const z = m[1].replace(/\s+/g, ' ').toLowerCase()
+        .replace(/^zona\s+/, 'Zona ').replace(/sul|norte|leste|oeste|central/, w => w[0].toUpperCase() + w.slice(1));
+      atual = {zona: z, sup: m[2].trim(), co: []};
+      out.set(z, atual); emCo = false; return;
+    }
+    if (/^co[\s-]?supervisor/i.test(l)) { emCo = true; return; }
+    if (atual && emCo) atual.co.push(l);
+  });
+  return [...out.values()];
+}
+function conferirSup() {
+  const l = parseSup(document.getElementById('supTxt').value);
+  const zonas = new Set(S.lista.map(g => g.z));
+  const semZona = l.filter(x => !zonas.has(x.zona)).map(x => x.zona);
+  let h = '';
+  if (!l.length) h = `<div class="notice">Não reconheci nenhuma zona. Use o formato "Zona Sul - Nome".</div>`;
+  else {
+    h = `<div class="ok-box"><b>${l.length} zonas reconhecidas</b><br>` +
+      l.map(x => `${esc(x.zona)}: 1 supervisor e ${x.co.length} co-supervisor${x.co.length === 1 ? '' : 'es'}`).join('<br>') + '</div>';
+    if (semZona.length) h += `<div class="err-box">Estas zonas não existem na base de igrejas: ${semZona.map(esc).join(', ')}. Confira a grafia.</div>`;
+  }
+  document.getElementById('supMsg').innerHTML = h;
+  supPronto = l.length ? l : null;
+  document.getElementById('btnSupSalvar').disabled = !supPronto || !podeEscrever;
+}
+async function salvarSup() {
+  if (!supPronto || !db) return;
+  try {
+    for (const x of supPronto) await db.doc('supervisao/' + slug(x.zona)).set({zona: x.zona, sup: x.sup, co: x.co, ts: Date.now()});
+    document.getElementById('supMsg').innerHTML = `<div class="ok-box"><b>Equipes salvas.</b></div>`;
+    document.getElementById('supTxt').value = ''; supPronto = null;
+    document.getElementById('btnSupSalvar').disabled = true;
+  } catch (e) { erroEscrita(e); }
+}
+async function limparSup() {
+  if (!db || !confirm('Remover as equipes de supervisão?')) return;
+  try {
+    const docs = await db.collection('supervisao').get();
+    for (const d of (docs.docs || [])) { try { await db.doc('supervisao/' + d.id).delete(); } catch (_) {} }
+    toast('Equipes removidas.');
+  } catch (e) { erroEscrita(e); }
+}
+function pintaSupervisao() {
+  const el = document.getElementById('supCards'); if (!el) return;
+  const porZona = new Map();
+  for (const g of S.lista) {
+    const o = porZona.get(g.z) || {igrejas: [], at: 0, f: 0, pg: 0, nAt: 0, A: 0, ambos: 0, acordo: 0};
+    o.igrejas.push(g); o.at += g.at; o.f += g.f; o.pg += g.pg;
+    if (g.at > 0.005) { o.nAt++; if (g.ab === 'A') o.A++; }
+    if (g.frente === 'ambos') o.ambos++;
+    if (g.act > 0 && g.acq === 0 && g.at > 0.005) o.acordo++;
+    porZona.set(g.z, o);
+  }
+  const zs = [...porZona.entries()].sort((a, b) => b[1].at - a[1].at);
+  el.innerHTML = zs.map(([z, o]) => {
+    const eq = SUP.get(z);
+    const top = o.igrejas.filter(g => g.at > 0.005).sort((a, b) => b.at - a.at).slice(0, 8);
+    return `<div class="card">
+      <div class="supcab">
+        <div><h2>${esc(z)}</h2>
+          ${eq ? `<p class="hint" style="margin:3px 0 0"><b>${esc(eq.sup)}</b>${eq.co.length ? ' · com ' + eq.co.map(esc).join(', ') : ''}</p>`
+               : `<p class="hint" style="margin:3px 0 0">Equipe não cadastrada</p>`}</div>
+        <button class="act" data-verzona="${esc(z)}">Ver todas na aba Igrejas</button>
+      </div>
+      <div class="kpis" style="margin-top:14px">
+        <div class="kpi"><span class="v num" style="color:var(--atraso)">${brl(o.at)}</span><span class="l">em atraso na zona</span></div>
+        <div class="kpi"><span class="v num">${o.nAt} de ${o.igrejas.length}</span><span class="l">igrejas a acionar</span></div>
+        <div class="kpi"><span class="v num">${o.A}</span><span class="l">classe A (metade do valor)</span></div>
+        <div class="kpi"><span class="v num">${pc1(pct(o.pg, o.f))}</span><span class="l">do lançado já pago</span></div>
+      </div>
+      <p class="hint" style="margin:14px 0 8px"><b>${o.ambos}</b> igrejas falham no acordo e no trimestre ao mesmo tempo ·
+        <b>${o.acordo}</b> têm acordo sem nenhuma parcela paga, candidatas a reacordo.</p>
+      <div class="tablewrap"><table style="min-width:560px"><thead><tr>
+        <th>Prioridade</th><th>Igreja</th><th>Regional</th><th class="r">Em atraso</th><th>Perfil</th><th class="r">Atraso máx.</th>
+      </tr></thead><tbody>${top.map((g, i) => `<tr data-c="${g.c}">
+        <td>${i + 1}º</td><td>${esc(g.n)}</td><td class="r">${g.r}</td>
+        <td class="r num" style="font-weight:600;color:var(--atraso)">${brl(g.at)}</td>
+        <td>${g.frente === 'ambos' ? '<span class="pill atraso">acordo + trimestre</span>'
+            : g.frente === 'acordo' ? '<span class="pill acordo">só acordo</span>'
+            : '<span class="pill emdia">só trimestre</span>'}</td>
+        <td class="r">${g.d} d</td></tr>`).join('')}</tbody></table></div>
+      ${o.nAt > 8 ? `<p class="hint" style="margin-top:8px">Mostrando as 8 maiores de ${o.nAt}.</p>` : ''}
+    </div>`;
+  }).join('');
+  const b = document.getElementById('btnSupLimpar');
+  if (b) b.hidden = !SUP.size || !podeEscrever;
+}
+
 /* ============ alertas ============ */
 function pintaAlertas() {
   const s = S.mensal, pri = s[0] || {m: '', f: 1, pg: 0}, ult = s[s.length - 2] || pri;
@@ -1622,7 +1738,7 @@ let DIR = new Map();
 function repinta() {
   recalcular();
   pintaVisao(); pintaSemanal(); pintaIgrejas(); pintaCortes(); pintaFrentes(); pintaAlertas();
-  pintaCaixa(); pintaLancamentos(); pintaBaixas(); pintaImportar();
+  pintaCaixa(); pintaSupervisao(); pintaLancamentos(); pintaBaixas(); pintaImportar();
   if (atual !== null) pintaFicha();
 }
 
@@ -1641,6 +1757,14 @@ document.querySelectorAll('#tIgrejas th').forEach(th => th.onclick = () => {
 });
 document.body.addEventListener('click', e => {
   const tr = e.target.closest('tr[data-c]'); if (tr) return abrir(+tr.dataset.c);
+  const vz = e.target.closest('[data-verzona]');
+  if (vz) {
+    irPara('igrejas');
+    document.getElementById('fZona').value = vz.dataset.verzona;
+    document.getElementById('fSit').value = 'at';
+    document.getElementById('fCls').value = ''; document.getElementById('fReg').value = ''; document.getElementById('q').value = '';
+    return pintaIgrejas();
+  }
   const vr = e.target.closest('[data-verreg]');
   if (vr) {
     irPara('igrejas');
@@ -1681,6 +1805,9 @@ document.getElementById('arquivo').addEventListener('change', e => { if (e.targe
 ['fRegDist', 'fZonaDist'].forEach(id => document.getElementById(id).addEventListener('change', pintaCortes));
 document.getElementById('btnImportar').onclick = publicarBase;
 document.getElementById('btnVoltarBase').onclick = voltarBaseOriginal;
+document.getElementById('btnSupConf').onclick = conferirSup;
+document.getElementById('btnSupSalvar').onclick = salvarSup;
+document.getElementById('btnSupLimpar').onclick = limparSup;
 document.getElementById('loteVenc').value = hojeISO();
 document.getElementById('uVenc').value = hojeISO();
 
@@ -1726,6 +1853,11 @@ function aplicaBase(snap) {
   };
   liga('base', aplicaBase);
   liga('baixas', snap => { const m = new Map(); (snap.docs || []).forEach(d => { if (d.exists) m.set(d.id, d.data()); }); baixas = m; repinta(); });
+  liga('supervisao', snap => {
+    const m = new Map();
+    (snap.docs || []).forEach(d => { if (d.exists) { const v = d.data(); if (v && v.zona) m.set(v.zona, v); } });
+    SUP = m; repinta();
+  });
   liga('historico', snap => { const m = new Map(); (snap.docs || []).forEach(d => { if (d.exists) m.set(d.id, d.data()); }); historico = m; repinta(); });
   liga('lotes', snap => { const m = new Map(); (snap.docs || []).forEach(d => { if (d.exists) m.set(d.id, d.data()); }); lotes = m; repinta(); });
 })();
